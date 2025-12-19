@@ -1,0 +1,181 @@
+\documentclass[10pt, a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=2cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{multicol}
+\usepackage{graphicx}
+
+% Compact formatting
+\setlength{\parskip}{0.3em}
+\setlength{\parindent}{0em}
+\titlespacing*{\section}{0pt}{1em}{0.5em}
+\titlespacing*{\subsection}{0pt}{0.7em}{0.3em}
+\titleformat{\section}{\large\bfseries\color{blue!70!black}}{\thesection}{0.5em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{0.5em}{}
+
+% Header
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\small\textbf{Corporate Bond Trade Flow Decomposition}}
+\rhead{\small Technical Specification v1.0}
+\cfoot{\thepage}
+
+\begin{document}
+
+% ============================================================================
+% PAGE 1: STRATEGY INTRODUCTION
+% ============================================================================
+
+\begin{center}
+{\Large\bfseries\color{blue!70!black} Trade Flow Decomposition}\\[0.3em]
+
+\end{center}
+
+\vspace{-0.5em}
+\hrule
+\vspace{0.8em}
+
+\section{Strategy Overview}
+
+\textbf{Core Idea:} Decompose trade order flow between corporate bond ETFs (LQD, HYG, JNK) and their constituent bonds based on \textit{co-occurrence patterns}. Trades occurring in coordinated ETF-bond activity carry different information than isolated trades. By clustering trades into behaviorally distinct groups, we extract \textbf{Conditional Order Imbalances (COI)} that predict returns better than aggregate order flow.
+
+\textbf{Economic Hypothesis:} The clustering separates:
+\begin{itemize}[leftmargin=1.5em, itemsep=0pt, topsep=2pt]
+    \item \textbf{Cluster A (Liquidity Provision):} ETF trades isolated from bond activity $\rightarrow$ mean-reverting signal
+    \item \textbf{Cluster B (Informed/Flow Trading):} Coordinated ETF + bond basket trading $\rightarrow$ trend-following signal
+\end{itemize}
+
+\textbf{Target Performance:} Sharpe Ratio $> 1.2$ (post-transaction costs) on factor-mimicking portfolios constructed from COI signals.
+
+\section{Data Inputs}
+
+{\small
+\textbf{Sources:} (1) \textbf{RFQ Logs} -- unambiguous trade direction; (2) \textbf{TRACE} -- bond trades with inferred direction; (3) \textbf{ETF Exchange} -- Lee-Ready classified. \textbf{Universe:} Top 500 liquid bonds per ETF ($\geq$3 trades/day, $\geq$\$500MM outstanding).
+}
+
+\section{Algorithm Pipeline}
+
+The algorithm proceeds in four stages, executed daily on a rolling 14-day window. The window will be f:
+
+\begin{center}
+\fbox{\textbf{Feature Construction}} $\rightarrow$ \fbox{\textbf{PCA}} $\rightarrow$ \fbox{\textbf{$k$-Means++}} $\rightarrow$ \fbox{\textbf{COI $\rightarrow$ Portfolio}}
+\end{center}
+
+\subsection{Stage 1: Feature Construction (16 Dimensions)}
+
+For each ``central'' trade at time $t$, count neighboring trades in window $(t-\tau, t+\tau)$ along three binary dimensions:
+
+\begin{center}
+\small
+\begin{tabular}{ccc|c}
+\textbf{Direction} & \textbf{Market} & \textbf{Timing} & \textbf{Metrics} \\
+\hline
+Same / Opposite & ETF / Bond & Before / After & Count, Notional \\
+\end{tabular}
+\end{center}
+
+$\Rightarrow$ $2 \times 2 \times 2 \times 2 = 16$ features. \textbf{Default $\tau = 60$ seconds} (vs. $707\mu$s for equities).
+
+\textbf{Feature Formula:} $x^{(k)}_{i,n} = \sum_{(j,m) \in \mathcal{N}} \mathbb{I}[\text{Cond}_k] \cdot \text{Value}_{j,m}$ where $\mathcal{N} = \{(j,m) : |t_{j,m} - t_{i,n}| < \tau\}$. \textbf{Normalize} via percentile ranks within time-of-day bucket (4 buckets, 90-day lookback).
+
+\subsection{Stage 2: PCA \& Stage 3: Clustering}
+
+\textbf{PCA:} Project to $M$ components ($\geq 70\%$ variance, typically $M=5$). \textbf{Align signs:} $\bm{v}_{j,d} \leftarrow \text{sgn}(\bm{v}_{j,d}^\top \bm{v}_{j,d-1}) \cdot \bm{v}_{j,d}$
+
+\textbf{$k$-Means++:} Cluster into $K$ groups (start $K=2$). \textbf{Align labels} via Hungarian algorithm: $\pi^* = \arg\min_\pi \sum_k \|\bm{m}_{k,d} - \bm{m}_{\pi(k),d-1}\|^2$. Reject if flip rate $>20\%$.
+
+\subsection{Stage 4: COI Signal}
+
+$\text{COI}_{k,d} = \frac{\sum_{(i,n) \in \mathcal{C}_{k,d}} \varepsilon_{i,n} \cdot \upsilon_{i,n}}{\sum_{(i,n) \in \mathcal{C}_{k,d}} \upsilon_{i,n}} \in [-1, +1]$. \textbf{Portfolio:} Orthogonalize COI to base factors, construct min-variance portfolio with unit COI exposure.
+
+\newpage
+
+% ============================================================================
+% PAGE 2: TECHNICAL SPECIFICATION
+% ============================================================================
+
+\section{Technical Specification}
+
+\subsection{Algorithm Pseudocode}
+
+{\small\ttfamily
+\begin{tabbing}
+\hspace{0.3cm}\=\hspace{0.3cm}\=\hspace{0.3cm}\=\kill
+\textbf{DAILY\_PIPELINE}(trades, date, prev\_pca, prev\_centroids):\\
+\>\textit{\# 1. FEATURE CONSTRUCTION}\\
+\>for trade in trades[date-14d : date]:\\
+\>\>neighbors = get\_trades\_in\_window(trade.timestamp, tau=60s)\\
+\>\>features[trade] = compute\_16\_features(trade, neighbors)\\
+\>\>features\_norm[trade] = percentile\_rank(features, lookback=90d)\\[0.3em]
+\>\textit{\# 2. PCA (with sign alignment)}\\
+\>pca.fit(stack(features\_norm)); align\_signs(pca, prev\_pca)\\
+\>scores = pca.transform(features\_norm)\\[0.3em]
+\>\textit{\# 3. CLUSTERING (with label alignment)}\\
+\>labels = MiniBatchKMeans(K, n\_init=100).fit\_predict(scores)\\
+\>labels = hungarian\_match(centroids, prev\_centroids)[labels]\\[0.3em]
+\>\textit{\# 4. COI CALCULATION}\\
+\>for k in range(K):\\
+\>\>COI[k] = (buy\_vol[k] - sell\_vol[k]) / (buy\_vol[k] + sell\_vol[k])\\
+\>return COI, pca, centroids
+\end{tabbing}
+}
+
+\subsection{Key Parameters}
+
+{\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Parameter} & \textbf{Default} & \textbf{Calibration} \\
+\midrule
+Neighborhood $\tau$ & 60s & Test [30s, 300s] \\
+Clusters $K$ & 2 & CH/DB scores, $K \in \{2,...,6\}$ \\
+PCA variance & 90\% & Fixed \\
+Rolling window & 14 days & Fixed \\
+\bottomrule
+\end{tabular}
+}
+
+\subsection{TRACE Side Inference}
+
+When RFQ unavailable: If \texttt{contra\_party\_type='C'} (customer), flip dealer side: $\varepsilon = +1$ if \texttt{rpt\_side='S'}, else $-1$. If interdealer, use yield vs. composite ($\pm$5bp threshold).
+
+\subsection{Outputs \& Success Criteria}
+
+{\small
+\textbf{Output Tables:} \texttt{gold.trade\_clusters} (per trade: cluster\_id, features), \texttt{gold.daily\_coi} (per cluster-day: coi, volumes)
+
+\textbf{Success:} Sharpe $>1.0$ post-costs (walk-forward 2022-24), Cluster stability $>80\%$, Direction coverage $>95\%$, Incremental $R^2 > 0.5\%$ vs Duration/Momentum
+}
+
+\subsection{Implementation Checklist}
+
+\begin{multicols}{2}
+\begin{enumerate}[leftmargin=1.5em, itemsep=1pt, topsep=2pt]
+    \item[$\square$] Ingest TRACE + ETF data to Bronze
+    \item[$\square$] Implement side inference logic
+    \item[$\square$] Create Silver layer (unified schema)
+    \item[$\square$] Build feature engine (16-dim)
+    \item[$\square$] Implement PCA with sign alignment
+    \item[$\square$] Implement $k$-means++ with label alignment
+    \item[$\square$] Calibrate $\tau$ and $K$
+    \item[$\square$] Compute daily COI signals
+    \item[$\square$] Build FMP constructor
+    \item[$\square$] Run backtest with transaction costs
+    \item[$\square$] Validate orthogonality to factors
+    \item[$\square$] Productionize pipeline
+\end{enumerate}
+\end{multicols}
+
+\vspace{0.5em}
+\hrule
+\vspace{0.3em}
+{\small\textbf{Reference:} Petit, Cucuringu, Cartea (2025). ``Data-Driven Trade Flow Decomposition for ETFs and their Constituents.'' \textit{ICAIF '25}. Full PRD available for detailed schemas, risk framework, and timeline.}
+
+\end{document}
