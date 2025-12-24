@@ -1,0 +1,80 @@
+To model the **Credit Futures Basis** (Futures vs. ETF) and **Synthetic Basis** (Futures vs. TRS) effectively, you must move beyond simple "Price vs. Fair Value." You need variables that quantify **friction, liquidity, and balance sheet costs**, as these are the primary drivers of mispricing in cash-settled credit markets.
+
+Here are the specific, additional variables to integrate into your algorithmic model:
+
+### 1. The "Arb Channel" Variables (ETF Mechanics)
+
+In Treasury markets, the arbitrage band is defined by shipping costs and repo. In Credit, it is defined by the **Authorized Participant (AP)** mechanism. You cannot arb the basis if the profit is smaller than the cost to create/redeem the ETF.
+
+* **Creation/Redemption Cost (bps):** The fee APs charge to convert a basket of bonds into ETF shares (or vice versa). This sets your "No-Arbitrage Band." If the Basis < Creation Cost, the trade is noise.
+* **ETF Borrow Cost (Stock Loan Rate):** The annualized cost to short the ETF.
+* *Critical:* This variable is dynamic. In stressed markets, borrow costs spike, making the "Reverse Cash and Carry" (Short ETF / Long Future) prohibitively expensive.
+
+
+* **Intraday NAV (iNAV) Latency:** The ETF trades in real-time; the iNAV (fair value) often lags. Model the **Premium/Discount Volatility** rather than just the absolute level.
+
+### 2. The "Liquidity Illusion" Variables (Index Quality)
+
+Unlike Treasuries, the underlying Credit Index is a theoretical basket of thousands of bonds, many of which do not trade daily.
+
+* **Staleness Ratio:** The percentage of bonds in the index that have *not* traded today.
+* *Algo Logic:* If Staleness > 40%, the Index level is artificial. Ignore the "Index Price" and solve for "Implied Index" using the ETF price and known liquidity premiums.
+
+
+* **Liquidity Score (LCS):** Bloomberg’s Liquidity Cost Score or a proprietary bid-ask metric.
+* *Usage:* High LCS (wider spreads) implies the ETF should trade at a discount to NAV (liquidation cost). If the ETF is at Par but LCS is high, the ETF is technically "rich."
+
+
+
+### 3. The "Balance Sheet" Variables (Funding Alpha)
+
+This is vital for the **Futures vs. TRS** trade. Banks price TRS based on their balance sheet constraints.
+
+* **Quarter-End Turn Premium:** Banks shrink balance sheets at quarter-ends (to lower G-SIB capital surcharges).
+* *Effect:* TRS spreads widen massively at quarter-end. Futures (cleared) do not.
+* *Variable:* **Days to Quarter-End.** As this decreases, the "Long Future / Short TRS" spread should widen.
+
+
+* **Implied Repo vs. SOFR Spread:**
+* Calculate: .
+* Compare this to **OIS (Overnight Index Swap)** or **SOFR**.
+* *Signal:* If Implied Repo dips significantly below SOFR, the Futures are "cheap" relative to risk-free rates (often caused by hedging pressure).
+
+
+
+### 4. Structural Mismatches (Hedge Ratios)
+
+Credit Futures have fixed definitions; your hedging instruments (ETFs/TRS) have drift.
+
+* **Beta/Correlation Shift:** The correlation between the ETF and the Index is not always 1.0.
+* *Variable:* **Rolling 20-Day Beta.** Adjust your hedge ratio dynamically. If the ETF acts "defensive" (Beta < 1) during a sell-off, you need to short *more* shares to hedge the Future.
+
+
+* **Duration mismatch (Key Rate Duration - KRD):**
+* The Index has a specific duration profile. The ETF manager might sample the index, creating "Curve Risk."
+* *Variable:* **KRD Deviation.** If the ETF is underweight the long-end (30yr) vs. the Index, a flattening yield curve will distort your basis P&L unrelated to credit.
+
+
+
+### 5. Corporate Action & Event Variables
+
+* **Fallen Angel Probability:** A metric tracking bonds on the verge of downgrade (BBB- to BB+).
+* *Impact:* When a large issuer is downgraded to High Yield, forced selling hits the IG ETF (price drops), but the Index rebalances later (lag). This creates a temporary, tradeable basis dislocation.
+
+
+* **New Issuance Calendar:** High supply of new corporate bonds usually cheapens the cash market (widens spreads).
+* *Signal:* Heavy issuance = Pressure on ETF/Cash Bonds = Basis (Future - Spot) moves higher (Futures outperform temporarily).
+
+
+
+### Summary Checklist for the Algo
+
+| Variable Category | Metric to Model | Why? |
+| --- | --- | --- |
+| **Friction** | **Creation/Redemption Cost** | Defines the "No-Arb" zone. |
+| **Shorting** | **ETF Borrow Rate** | Can kill the "Short ETF" trade. |
+| **Quality** | **Index Stale Pricing %** | Prevents trading against "ghost" prices. |
+| **Funding** | **G-SIB / Quarter-End Flag** | Captures regulatory arbitrage (TRS vs Future). |
+| **Macro** | **New Issuance Volume** | Predicts pressure on the Cash leg. |
+
+**Recommendation:** Start by building a historical time series of the **Implied Repo Rate of the Future** vs. the **TRS Financing Rate**. The divergence between these two is the cleanest, most scalable alpha in this space.
